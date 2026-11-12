@@ -1,0 +1,8 @@
+{
+  "name": "alisraa-qc-manager",
+  "compatibility_date": "2026-11-12",
+  "assets": {
+    "directory": ".",
+    "not_found_handling": "single-page-application"
+  }
+}
