@@ -56,24 +56,20 @@
     <section id="view-targets" class="view">
       <div class="page-heading"><div><p class="eyebrow">إعدادات QC</p><h1>مواد QC والأهداف</h1><p class="muted">بيانات منفصلة حسب الجهاز والمنتج والـ LOT والمستوى والتحليل.</p></div></div>
       <div class="panel"><div id="targets-table"></div></div>
-      <div class="panel form-panel"><h2>إضافة مادة QC وتحاليلها</h2>
-        <p class="muted">أدخل بيانات الجهاز والمادة والـ LOT والمستوى مرة واحدة، ثم أضف جميع التحاليل التابعة لها.</p>
-        <form id="targetForm" class="form-grid">
-          <label>الجهاز<select name="deviceId" id="targetDevice" required></select></label>
-          <label>اسم مادة QC<input name="product" required placeholder="اسم المنتج"></label>
-          <label>الشركة المصنّعة<input name="qcManufacturer" placeholder="الشركة المصنّعة"></label>
-          <label>رقم LOT<input name="lot" required></label>
-          <label>تاريخ الانتهاء<input name="expiry" type="date"></label>
-          <label>المستوى (Level)<input name="level" required placeholder="Level 1 / Level 2"></label>
-          <label>نوع الهدف<select name="targetType"><option value="manufacturer">الشركة المصنعة</option><option value="laboratory">المختبر</option></select></label>
-          <label class="full-width">المصدر / مرجع الوثيقة<input name="source" required placeholder="نشرة LOT / رقم الوثيقة"></label>
-          <div class="full-width analyte-entry-wrap">
-            <div class="analyte-entry-head"><strong>تحاليل مادة QC</strong><button type="button" class="ghost" id="addAnalyteRow">＋ إضافة تحليل</button></div>
-            <div id="analyteRows" class="analyte-rows"></div>
-          </div>
-          <button class="primary full-width" type="submit">حفظ المادة وجميع التحاليل</button>
-        </form>
-      </div>
+      <div class="panel form-panel"><h2>إضافة هدف QC</h2><form id="targetForm" class="form-grid">
+        <label>الجهاز<select name="deviceId" id="targetDevice" required></select></label>
+        <label>اسم مادة QC<input name="product" required placeholder="اسم المنتج"></label>
+        <label>رقم LOT<input name="lot" required></label>
+        <label>تاريخ الانتهاء<input name="expiry" type="date"></label>
+        <label>التحليل<input name="analyte" required></label>
+        <label>المستوى<input name="level" required placeholder="Level 1 / 2"></label>
+        <label>نوع الهدف<select name="targetType"><option value="manufacturer">الشركة المصنعة</option><option value="laboratory">المختبر</option></select></label>
+        <label>Mean<input name="mean" type="number" step="any" required></label>
+        <label>SD<input name="sd" type="number" step="any" min="0" required></label>
+        <label>الوحدة<input name="unit" required></label>
+        <label>المصدر/مرجع الوثيقة<input name="source" required placeholder="نشرة LOT / رقم الوثيقة"></label>
+        <button class="primary" type="submit">حفظ الهدف</button>
+      </form></div>
     </section>
 
     <section id="view-entry" class="view">
@@ -176,10 +172,6 @@
       <div class="panel"><h2>معلومات الأجهزة الافتراضية</h2><p>Beckman Coulter Access 2 · Roche cobas c111 · bioMérieux VIDAS · Roche cobas e 411 (مخطط للإدخال)</p></div>
     </section>
   </main>
-</div>
-<div id="updateNotice" class="update-notice" role="status" aria-live="polite" hidden>
-  <div class="update-copy"><strong>يتوفر تحديث جديد للتطبيق</strong><span>سيتم تحديث ملفات التطبيق مع الاحتفاظ ببيانات QC المحفوظة على هذا الجهاز.</span></div>
-  <div class="update-actions"><button id="updateNow" class="primary" type="button">تحديث الآن</button><button id="updateLater" class="ghost" type="button">لاحقاً</button></div>
 </div>
 <div id="toast" class="toast" role="status"></div>
 <script src="assets/qc-engine.js"></script>
