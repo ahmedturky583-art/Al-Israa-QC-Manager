@@ -1,126 +1,98 @@
-const DB_NAME="alisraa_qc_manager", DB_VERSION=3;
-const stores=["devices","targets","runs","calibrations","eqa","updates","aps","policies","audit"];
-let db;
-const $=s=>document.querySelector(s);
-const $$=s=>[...document.querySelectorAll(s)];
-const uid=()=>crypto.randomUUID();
-const nowLocal=()=>{const d=new Date();d.setMinutes(d.getMinutes()-d.getTimezoneOffset());return d.toISOString().slice(0,16)};
-function toast(msg){const t=$("#toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),2600)}
-function openDB(){return new Promise((resolve,reject)=>{const req=indexedDB.open(DB_NAME,DB_VERSION);req.onupgradeneeded=()=>{const d=req.result;stores.forEach(s=>{if(!d.objectStoreNames.contains(s))d.createObjectStore(s,{keyPath:"id"})})};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error)})}
-function all(store){return new Promise((resolve,reject)=>{const r=db.transaction(store).objectStore(store).getAll();r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
-function put(store,obj){return new Promise((resolve,reject)=>{const tx=db.transaction(store,"readwrite");tx.objectStore(store).put(obj);tx.oncomplete=async()=>{if(store!=="audit"){try{await new Promise((res,rej)=>{const a=db.transaction("audit","readwrite");a.objectStore("audit").put({id:uid(),action:"UPSERT",objectType:store,objectId:obj.id,afterState:JSON.stringify(obj),actor:"local-manager",at:new Date().toISOString()});a.oncomplete=res;a.onerror=()=>rej(a.error)})}catch(err){console.warn("Audit append failed",err)}}resolve(obj)};tx.onerror=()=>reject(tx.error)})}
-function seedDevices(){return all("devices").then(async rows=>{if(rows.length)return;const data=[
-{id:"access2",name:"Beckman Coulter Access 2",manufacturer:"Beckman Coulter",model:"Access 2",status:"active"},
-{id:"c111",name:"Roche cobas c111",manufacturer:"Roche",model:"cobas c111",status:"active"},
-{id:"vidas",name:"bioMérieux VIDAS",manufacturer:"bioMérieux",model:"VIDAS",status:"active"},
-{id:"e411",name:"Roche cobas e 411",manufacturer:"Roche",model:"cobas e 411",status:"planned"}];for(const x of data)await put("devices",x)})}
-function showView(name){$$(".view").forEach(x=>x.classList.toggle("active",x.id==="view-"+name));$$(".nav").forEach(x=>x.classList.toggle("active",x.dataset.view===name));window.scrollTo(0,0);render()}
-document.addEventListener("click",e=>{const n=e.target.closest("[data-view]");if(n)showView(n.dataset.view);const g=e.target.closest("[data-go]");if(g)showView(g.dataset.go)});
-function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
-function fmtDate(s){return s?new Date(s).toLocaleString("ar-IQ"):"—"}
-function statusLabel(s){return ({accepted:"مقبول",warning:"تحذير",rejected:"مرفوض",pending_review:"مراجعة"})[s]||s}
-async function render(){
- const [devices,targets,runs,cals,eqa,updates,aps,policies,audit]=await Promise.all(stores.map(all)); window._targetsCache=targets;
- $("#stat-total").textContent=runs.length;$("#stat-accepted").textContent=runs.filter(x=>x.status==="accepted").length;$("#stat-warning").textContent=runs.filter(x=>x.status==="warning").length;$("#stat-rejected").textContent=runs.filter(x=>x.status==="rejected").length;
- $("#device-summary").innerHTML=devices.map(d=>`<div class="device-row"><span>${esc(d.name)}</span><span class="tag">${d.status==="planned"?"مخطط":d.status==="active"?"فعال":"غير فعال"}</span></div>`).join("")||'<div class="empty">لا توجد أجهزة</div>';
- const recent=[...runs].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,5);$("#recent-runs").innerHTML=table(["الوقت","التحليل","القراءات","الحالة"],recent.map(r=>[fmtDate(r.runAt),esc(r.analyte||""),esc((r.results||[{value:r.value}]).map(x=>x.value).join(" / ")),statusLabel(r.status)]));
- $("#devices-table").innerHTML=table(["الجهاز","الشركة","الموديل","الحالة"],devices.map(d=>[esc(d.name),esc(d.manufacturer),esc(d.model),d.status==="planned"?"مخطط للإدخال":d.status==="active"?"فعال":"غير فعال"]));
- $("#targets-table").innerHTML=table(["الجهاز","المنتج / LOT","التحليل","المستوى","نوع الهدف","Mean ± SD","المصدر","الاعتماد"],targets.map(t=>[esc(devices.find(d=>d.id===t.deviceId)?.name||""),`${esc(t.product)} / ${esc(t.lot)}`,esc(t.analyte),esc(t.level),t.targetType==="manufacturer"?"الشركة":"المختبر",`${t.mean} ± ${t.sd} ${esc(t.unit)}`,esc(t.source),t.approved?"معتمد":`<button class="approval-btn" data-approve-target="${t.id}">اعتماد</button>`]));
- $("#history-table").innerHTML=table(["الوقت","الجهاز","التحليل","المستويات والقراءات","الحالة","القواعد","السياسة"],[...runs].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(r=>[fmtDate(r.runAt),esc(devices.find(d=>d.id===r.deviceId)?.name||""),esc(r.analyte||""),(r.results||[{level:r.level,value:r.value,unit:"",z:r.z}]).map(x=>`${esc(x.level)}: ${esc(x.value)} ${esc(x.unit||"")} (Z=${Number(x.z).toFixed(2)})`).join("<br>"),statusLabel(r.status),esc((r.rules||[]).join(", ")||"—"),esc(r.policy||"—")]));
- const opts=devices.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join("");$("#targetDevice").innerHTML=opts;$$(".deviceSelect").forEach(s=>s.innerHTML=opts);
- const activeDevices=devices.filter(d=>d.status==="active");
- $("#runDevice").innerHTML=activeDevices.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join("");
- updateRunSelectors();
- $("#apsTable").innerHTML=table(["التحليل","المواصفة","النموذج","TEa","المصدر","الحالة"],aps.map(a=>[esc(a.analyte),esc(a.name),esc(a.model),`${a.tea} ${esc(a.unit)}`,esc(a.source),a.status==="approved"?"معتمد":`<button class="approval-btn" data-approve-aps="${a.id}">اعتماد</button>`]));
- $("#calEqaList").innerHTML=table(["النوع","التفاصيل","التاريخ"],[...cals.map(x=>["معايرة",`${esc(x.deviceName)} · ${esc(x.analyte)} · ${esc(x.status)}`,x.date]),...eqa.map(x=>["EQA",`${esc(x.provider)} · ${esc(x.analyte)} · Z=${esc(x.zscore)}`,x.createdAt])]);
- $("#updatesList").innerHTML=table(["المصدر","التحديث","التاريخ","الحالة"],updates.map(x=>[esc(x.source),x.url?`<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>`:esc(x.title),esc(x.date||"—"),"بانتظار المراجعة"]));
- $("#dbStatus").textContent=`قاعدة البيانات المحلية جاهزة · ${targets.length} هدف QC · ${runs.length} تشغيل · ${audit.length} سجل تدقيق`;
- $("#policyTable").innerHTML=table(["الجهاز","التحليل","الإصدار","القواعد","المرجع","الحالة"],policies.map(p=>[esc(devices.find(d=>d.id===p.deviceId)?.name||""),esc(p.analyte),esc(p.version),esc(p.rules.join(", ")),esc(p.reference),p.active?"فعال":"غير فعال"]));
- $("#auditTable").innerHTML=table(["التاريخ","العملية","الكيان","المعرف","المستخدم"],[...audit].sort((a,b)=>b.at.localeCompare(a.at)).slice(0,100).map(a=>[fmtDate(a.at),esc(a.action),esc(a.objectType),esc(a.objectId),esc(a.actor)]));
- 
+(function(){
+"use strict";
+const DB="alisraa-qc-v3",STORE=["targets","runs","audit","meta","calibration","eqa","actions"];
+const devices=["Beckman Coulter Access 2","Roche cobas c111","bioMérieux VIDAS","Roche cobas e 411"];
+let db,latestResult=null,previousView="dashboard";
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const uid=()=>crypto.randomUUID?crypto.randomUUID():Date.now()+"-"+Math.random().toString(16).slice(2);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const dateNow=()=>new Date().toISOString();
+function openDB(){return new Promise((res,rej)=>{const q=indexedDB.open(DB,2);q.onupgradeneeded=()=>{STORE.forEach(n=>{if(!q.result.objectStoreNames.contains(n))q.result.createObjectStore(n,{keyPath:"id"})})};q.onsuccess=()=>{db=q.result;res()};q.onerror=()=>rej(q.error)})}
+function all(store){return new Promise((res,rej)=>{const q=db.transaction(store).objectStore(store).getAll();q.onsuccess=()=>res(q.result||[]);q.onerror=()=>rej(q.error)})}
+function put(store,obj){return new Promise((res,rej)=>{const q=db.transaction(store,"readwrite").objectStore(store).put(obj);q.onsuccess=()=>res(obj);q.onerror=()=>rej(q.error)})}
+function clear(store){return new Promise((res,rej)=>{const q=db.transaction(store,"readwrite").objectStore(store).clear();q.onsuccess=()=>res();q.onerror=()=>rej(q.error)})}
+function toast(s){let n=$("#toast");if(!n){n=document.createElement("div");n.id="toast";n.style="position:fixed;bottom:20px;left:12px;right:12px;background:#102d4d;color:white;padding:12px;border-radius:12px;z-index:99;text-align:center";document.body.append(n)}n.textContent=s;n.style.display="block";setTimeout(()=>n.style.display="none",2600)}
+function statusLabel(s){return ({accepted:"مقبول",warning:"تحذير",rejected:"مرفوض",incomplete:"تقييم غير مكتمل"})[s]||s}
+function pill(s){return `<span class="pill ${s}">${statusLabel(s)}</span>`}
+function nav(view,push=true){if(!$("#view-"+view))return;previousView=$(".view.active")?.id.replace("view-","")||"dashboard";$$(".view").forEach(x=>x.classList.toggle("active",x.id==="view-"+view));$$("nav button").forEach(x=>x.classList.toggle("active",x.dataset.view===view));if(push)history.pushState({view},"","#"+view);if(view==="history")renderHistory();if(view==="targets")renderTargets();if(view==="analytics")renderAnalytics();if(view==="settings")renderDevices();if(view==="calibration")renderCalibration();if(view==="eqa")renderEqa();if(view==="actions")renderActions()}
+window.addEventListener("popstate",e=>nav(e.state?.view||location.hash.slice(1)||"dashboard",false));
+$("#nav").addEventListener("click",e=>{const b=e.target.closest("[data-view]");if(b)nav(b.dataset.view)});
+async function audit(action,detail){await put("audit",{id:uid(),at:dateNow(),action,detail})}
+function fillDevices(){["#tDevice","#rDevice","#aDevice","#cDevice","#eDevice","#acDevice"].forEach(sel=>$(sel).innerHTML=devices.map(d=>`<option>${esc(d)}</option>`).join(""))}
+async function renderDashboard(){const runs=await all("runs");$("#mRuns").textContent=runs.length;$("#mAccepted").textContent=runs.filter(x=>x.status==="accepted").length;$("#mWarning").textContent=runs.filter(x=>x.status==="warning").length;$("#mRejected").textContent=runs.filter(x=>x.status==="rejected").length;$("#today").textContent=new Date().toLocaleDateString("ar-IQ");$("#recentRuns").innerHTML=runs.sort((a,b)=>b.runAt.localeCompare(a.runAt)).slice(0,5).map(r=>`<div class="history-item"><b>${esc(r.analyte)}</b> · ${esc(r.device)} · ${new Date(r.runAt).toLocaleString("ar-IQ")} ${pill(r.status)}<button class="btn secondary" data-open-run="${r.id}">التفاصيل</button></div>`).join("")||"لا توجد تشغيلات بعد."}
+async function renderTargets(){const ts=await all("targets");$("#targetRows").innerHTML=ts.map(t=>`<tr><td>${esc(t.device)}</td><td>${esc(t.material)}<br><small>${esc(t.lot)}</small></td><td>${esc(t.level)}</td><td>${esc(t.analyte)}</td><td>${t.mean} ± ${t.sd} ${esc(t.unit)}</td><td>${t.approved?'<span class="pill accepted">معتمد</span>':'<span class="pill warning">مسودة</span>'}</td><td>${t.approved?'':`<button class="btn secondary" data-approve="${t.id}">اعتماد</button>`} <button class="btn ghost" data-delete-target="${t.id}">حذف</button></td></tr>`).join("")||'<tr><td colspan="7">لا توجد أهداف.</td></tr>'}
+$("#targetForm").addEventListener("submit",async e=>{e.preventDefault();const t={id:uid(),device:$("#tDevice").value,material:$("#tMaterial").value.trim(),lot:$("#tLot").value.trim(),expiry:$("#tExpiry").value,level:$("#tLevel").value,analyte:$("#tAnalyte").value.trim(),unit:$("#tUnit").value.trim(),mean:+$("#tMean").value,sd:+$("#tSd").value,lower:$("#tLow").value===""?null:+$("#tLow").value,upper:$("#tHigh").value===""?null:+$("#tHigh").value,reference:$("#tRef").value,approved:false,createdAt:dateNow()};if(t.sd<=0||!Number.isFinite(t.mean)||!Number.isFinite(t.sd))return toast("تحقق من Mean وSD");const dup=(await all("targets")).some(x=>x.device===t.device&&x.lot===t.lot&&x.level===t.level&&x.analyte.toLowerCase()===t.analyte.toLowerCase());if(dup)return toast("هذا التحليل مسجل مسبقاً لهذا الجهاز والدفعة والمستوى");await put("targets",t);await audit("إضافة هدف",t);e.target.reset();renderTargets();toast("حُفظ الهدف كمسودة")});
+$("#targetRows").addEventListener("click",async e=>{const a=e.target.closest("[data-approve]"),d=e.target.closest("[data-delete-target]");if(a){const t=(await all("targets")).find(x=>x.id===a.dataset.approve);t.approved=true;t.approvedAt=dateNow();await put("targets",t);await audit("اعتماد هدف",t);renderTargets();toast("تم اعتماد الهدف")}if(d&&confirm("حذف الهدف؟")){await dbDelete("targets",d.dataset.deleteTarget);await audit("حذف هدف",d.dataset.deleteTarget);renderTargets()}});
+function dbDelete(store,id){return new Promise((res,rej)=>{const q=db.transaction(store,"readwrite").objectStore(store).delete(id);q.onsuccess=()=>res();q.onerror=()=>rej(q.error)})}
+async function populateRun(){const ts=(await all("targets")).filter(t=>t.approved);const dev=$("#rDevice").value;const analytes=[...new Set(ts.filter(t=>t.device===dev).map(t=>t.analyte))];$("#rAnalyte").innerHTML=analytes.map(a=>`<option>${esc(a)}</option>`).join("")||'<option value="">لا توجد أهداف معتمدة</option>';await populateLots()}
+async function populateLots(){const ts=(await all("targets")).filter(t=>t.approved&&t.device===$("#rDevice").value&&t.analyte===$("#rAnalyte").value);const lots=[...new Map(ts.map(t=>[t.lot,t])).values()];$("#rLot").innerHTML=lots.map(t=>`<option value="${esc(t.lot)}">${esc(t.material)} · ${esc(t.lot)}</option>`).join("");await populateLevels()}
+async function populateLevels(){const ts=(await all("targets")).filter(t=>t.approved&&t.device===$("#rDevice").value&&t.analyte===$("#rAnalyte").value&&t.lot===$("#rLot").value);$("#runLevels").innerHTML=ts.map(t=>`<div class="field"><label>${esc(t.level)} · Mean ${t.mean} · SD ${t.sd} ${esc(t.unit)}</label><input type="number" step="any" required data-target="${t.id}" placeholder="أدخل القراءة الفعلية"></div>`).join("")||'<p class="muted">لا توجد أهداف معتمدة مطابقة.</p>'}
+$("#rDevice").addEventListener("change",populateRun);$("#rAnalyte").addEventListener("change",populateLots);$("#rLot").addEventListener("change",populateLevels);
+async function historyFor(target){const runs=await all("runs");return runs.flatMap(r=>r.results.filter(x=>x.targetId===target.id).map(x=>({z:x.z,level:x.level,runAt:r.runAt,status:r.status})))}
+$("#runForm").addEventListener("submit",async e=>{e.preventDefault();const ts=await all("targets"),inputs=$$("#runLevels input[data-target]");if(!inputs.length)return toast("لا توجد أهداف معتمدة لهذا الاختيار");const selected=inputs.map(i=>({target:ts.find(t=>t.id===i.dataset.target),value:+i.value}));if(selected.some(x=>!x.target||!Number.isFinite(x.value)))return toast("أدخل جميع القراءات بصورة صحيحة");const allRuns=await all("runs");const results=[];for(const x of selected){const hist=allRuns.filter(r=>r.device===x.target.device&&r.analyte===x.target.analyte&&r.lot===x.target.lot).flatMap(r=>r.results.filter(y=>y.targetId===x.target.id).map(y=>({z:y.z,level:y.level,targetId:y.targetId,runAt:r.runAt})));results.push({...x.target,value:x.value,targetId:x.target.id,history:hist})}
+const evald=QCEngine.evaluate({results:results.map(r=>({level:r.level,value:r.value,mean:r.mean,sd:r.sd,lower:r.lower,upper:r.upper,targetId:r.id})),history:results.flatMap(r=>r.history),policy:$("#rPolicy").value});
+const finalResults=evald.results.map((r,i)=>({...r,targetId:results[i].id,unit:results[i].unit,mean:results[i].mean,sd:results[i].sd,material:results[i].material,lot:results[i].lot,analyte:results[i].analyte,device:results[i].device}));
+const run={id:uid(),runAt:dateNow(),device:$("#rDevice").value,analyte:$("#rAnalyte").value,lot:$("#rLot").value,policy:$("#rPolicy").value,source:$("#rSource").value,notes:$("#rNotes").value,status:evald.status,reasons:evald.reasons,rules:evald.rules,results:finalResults,engineVersion:"3.3.0",policySnapshot:{policy:$("#rPolicy").value,performanceSource:$("#rSource").value,sourceEdition:$("#rEdition").value.trim()||"غير موثق",sourceYear:$("#rYear").value.trim()||"غير موثق",verificationStatus:"غير معتمد — تحقق يدوي مطلوب"}};
+await put("runs",run);await audit("تشغيل QC",run);latestResult=run;renderResult(run);await renderDashboard();toast("تم حفظ وتقييم التشغيل")});
+function renderResult(run){const r=run.results;$("#resultPanel").innerHTML=`<div class="panel"><div class="result-hero ${run.status}"><small>القرار النهائي</small><h2>${statusLabel(run.status)}</h2><div>${esc(run.device)} · ${esc(run.analyte)} · LOT ${esc(run.lot)}</div></div><h3>القيم المحسوبة</h3><div class="result-grid">${r.map(x=>`<div class="result-cell"><b>${esc(x.level)}</b><strong>${x.value} ${esc(x.unit)}</strong><span class="small">Mean ${x.mean} · SD ${x.sd}</span><br><b>Z = ${x.z.toFixed(2)}</b></div>`).join("")}</div><h3>سبب القرار</h3><ul>${run.reasons.map(x=>`<li>${esc(x)}</li>`).join("")}</ul><h3>تقييم القواعد</h3>${(run.rules||[]).map(x=>`<div class="rule-row"><span><b>${esc(x.rule)}</b><br><small>${esc(x.level)}</small></span><span>${esc(x.state)} — ${esc(x.detail)}</span></div>`).join("")||"لم تُحفظ تفاصيل القواعد لهذا التشغيل القديم."}<div class="actions"><button class="btn secondary" data-action-run="${run.id}" data-action-device="${esc(run.device)}" data-action-analyte="${esc(run.analyte)}">فتح نموذج التحقيق والإجراء التصحيحي</button></div><div class="notice warn"><b>الإجراء عند الرفض:</b> لا تُصدر نتائج مرضى متأثرة قبل التحقيق وفق إجراء المختبر. راجع المادة والـ LOT والصلاحية والتحضير، ثم الكواشف والمعايرة والصيانة وظروف التشغيل. أعد QC وفق SOP بعد تحديد السبب. لا تعتبر إعادة QC الناجحة وحدها دليلاً على صلاحية النتائج السابقة.</div><p class="small muted">السياسة: ${esc(run.policy)} · مرجع الأداء المختار: ${esc(run.source)}. المرجع لم يتم اعتماده آلياً؛ يجب توثيق الإصدار والسنة والملاءمة.</p></div>`}
+async function renderHistory(){const runs=(await all("runs")).sort((a,b)=>b.runAt.localeCompare(a.runAt)),q=($("#historySearch").value||"").toLowerCase();const list=runs.filter(r=>[r.device,r.analyte,r.lot].join(" ").toLowerCase().includes(q));$("#historyRows").innerHTML=list.map(r=>`<div class="history-item"><div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(r.analyte)} · ${esc(r.device)}</b>${pill(r.status)}</div><div class="small muted">${new Date(r.runAt).toLocaleString("ar-IQ")} · LOT ${esc(r.lot)}</div><div>${r.results.map(x=>`${esc(x.level)}: ${x.value} ${esc(x.unit)} (Z ${x.z.toFixed(2)})`).join(" | ")}</div><button class="btn secondary" data-open-run="${r.id}">فتح التفاصيل والرسم</button></div>`).join("")||'<div class="panel">لا توجد نتائج مطابقة.</div>'}
+$("#historySearch").addEventListener("input",renderHistory);
+async function openRun(id){const r=(await all("runs")).find(x=>x.id===id);if(!r)return;const hist=await all("runs");$("#runDetail").classList.remove("hidden");$("#runDetail").innerHTML=`<div class="backline"><button id="backHistory">← العودة إلى السجل</button><b>تفاصيل التشغيل</b></div>`;const holder=document.createElement("div");$("#runDetail").append(holder);const old=$("#resultPanel");const backup=old.innerHTML;renderResult(r);holder.innerHTML=old.innerHTML;old.innerHTML=backup;const chartWrap=document.createElement("div");chartWrap.innerHTML="<h3>Levey–Jennings التاريخي</h3>";r.results.forEach(res=>{const pts=hist.filter(x=>x.device===r.device&&x.analyte===r.analyte&&x.lot===r.lot).flatMap(x=>x.results.filter(y=>y.targetId===res.targetId).map(y=>({z:y.z,at:x.runAt}))).sort((a,b)=>new Date(a.at)-new Date(b.at));if(!pts.length)pts.push({z:res.z,at:r.runAt});chartWrap.innerHTML+=`<h4>${esc(res.level)}</h4>${chartSVG(pts)}`});holder.append(chartWrap);$("#runDetail").scrollIntoView({behavior:"smooth"})}
+function chartSVG(points){const W=620,H=240,L=45,R=15,T=15,B=35,min=-3.5,max=3.5,x=i=>L+(points.length<2?0:i*(W-L-R)/(points.length-1)),y=v=>T+(max-v)/(max-min)*(H-T-B);let lines=[3,2,1,0,-1,-2,-3].map(v=>`<line x1="${L}" y1="${y(v)}" x2="${W-R}" y2="${y(v)}" stroke="${v===0?'#31577e':'#d3a34b'}" stroke-dasharray="${v===0?'':'5 4'}"/><text x="4" y="${y(v)+4}" font-size="11" fill="#52647a">${v>0?'+':''}${v}SD</text>`).join("");let poly=points.map((p,i)=>`${x(i)},${y(Math.max(-3.5,Math.min(3.5,p.z)))}`).join(" ");let dots=points.map((p,i)=>`<circle cx="${x(i)}" cy="${y(Math.max(-3.5,Math.min(3.5,p.z)))}" r="4" fill="${Math.abs(p.z)>=3?'#bd3f4b':Math.abs(p.z)>=2?'#b77a13':'#16845b'}"><title>${new Date(p.at).toLocaleString()} Z=${p.z.toFixed(2)}</title></circle>`).join("");return `<svg class="chart" viewBox="0 0 ${W} ${H}">${lines}<polyline points="${poly}" fill="none" stroke="#1769aa" stroke-width="2.5"/>${dots}<text x="${W/2}" y="${H-7}" text-anchor="middle" font-size="11" fill="#64758a">تسلسل التشغيلات زمنياً · ${points.length} نقطة</text></svg>${points.length<2?'<p class="small muted">نقطة واحدة: لا يمكن استنتاج Trend أو Shift.</p>':''}`}
+document.addEventListener("click",e=>{
+ const ac=e.target.closest("[data-action-run]");
+ if(ac){nav("actions");$("#acRunId").value=ac.dataset.actionRun;$("#acDevice").value=ac.dataset.actionDevice;$("#acAnalyte").value=ac.dataset.actionAnalyte;$("#acDate").value=new Date().toISOString().slice(0,10);}
+ const b=e.target.closest("[data-open-run]");if(b){nav("history");openRun(b.dataset.openRun)}if(e.target.id==="backHistory"){$("#runDetail").classList.add("hidden");$("#runDetail").innerHTML=""}});
+async function renderAnalytics(){const ts=(await all("targets")).filter(x=>x.approved);const runs=await all("runs");$("#aDevice").innerHTML=[...new Set(ts.map(x=>x.device))].map(x=>`<option>${esc(x)}</option>`).join("");await updateAnalytics()}
+async function updateAnalytics(){
+ const d=$("#aDevice").value,ts=(await all("targets")).filter(x=>x.approved&&x.device===d);
+ const analytes=[...new Set(ts.map(x=>x.analyte))];const current=$("#aAnalyte").value;
+ $("#aAnalyte").innerHTML=analytes.map(x=>`<option>${esc(x)}</option>`).join("");
+ if(current&&analytes.includes(current))$("#aAnalyte").value=current;
+ const matching=ts.filter(x=>x.analyte===$("#aAnalyte").value);
+ const lots=[...new Set(matching.map(x=>x.lot))],oldLot=$("#aLot").value;
+ $("#aLot").innerHTML=lots.map(x=>`<option>${esc(x)}</option>`).join("");
+ if(oldLot&&lots.includes(oldLot))$("#aLot").value=oldLot;
+ const target=matching.find(x=>x.lot===$("#aLot").value&&x.level===$("#aLevel").value)||matching.find(x=>x.lot===$("#aLot").value);
+ if(!target){$("#analyticsOutput").innerHTML="لا توجد أهداف معتمدة لهذا الاختيار.";return}
+ const runs=(await all("runs")).filter(r=>r.device===d&&r.analyte===target.analyte&&r.lot===target.lot);
+ const pts=runs.flatMap(r=>r.results.filter(x=>x.targetId===target.id).map(x=>({z:x.z,at:r.runAt,value:x.value}))).sort((a,b)=>new Date(a.at)-new Date(b.at));
+ const vals=pts.map(x=>x.value),mean=vals.length?vals.reduce((a,b)=>a+b,0)/vals.length:0,sd=vals.length>1?Math.sqrt(vals.reduce((a,b)=>a+(b-mean)**2,0)/(vals.length-1)):0,cv=mean?sd/Math.abs(mean)*100:null;
+ const bias=vals.length&&target.mean!==0?((mean-target.mean)/target.mean*100):null;
+ const pattern=QCEngine.analyzeSeries(pts.map(p=>({z:(p.value-target.mean)/target.sd,runAt:p.at})));
+ $("#analyticsOutput").innerHTML=`<div class="result-grid"><div class="result-cell">عدد النقاط<strong>${pts.length}</strong></div><div class="result-cell">متوسط المختبر<strong>${vals.length?mean.toFixed(3):"—"}</strong></div><div class="result-cell">SD المختبر<strong>${vals.length>1?sd.toFixed(3):"—"}</strong></div><div class="result-cell">CV%<strong>${cv==null?"—":cv.toFixed(2)+"%"}</strong></div><div class="result-cell">Bias%<strong>${bias==null?"—":bias.toFixed(2)+"%"}</strong></div></div><h3>Levey–Jennings · ${esc(target.level)} · LOT ${esc(target.lot)}</h3>${chartSVG(pts.map(p=>({z:(p.value-target.mean)/target.sd,at:p.at})))}<div class="notice">${pattern.trend?"Trend محتمل وفق 7 نقاط متتابعة.":"لا يظهر Trend وفق فحص 7 نقاط."} ${pattern.shift?"Shift محتمل وفق 8 نقاط على جانب واحد.":"لا يظهر Shift وفق فحص 8 نقاط."}<br>${esc(pattern.biasDirection)} · ${esc(pattern.randomError)}<br><b>تنبيه:</b> تحليل وصفي استكشافي لا يثبت سبب الخطأ ولا يحدد القبول وحده.</div>`;
 }
-function updateRunSelectors(){
- const dev=$("#runDevice")?.value, targetsCache=window._targetsCache||[];
- const analytes=[...new Set(targetsCache.filter(t=>t.deviceId===dev&&t.approved).map(t=>t.analyte))];
- $("#runAnalyte").innerHTML=analytes.map(a=>`<option>${esc(a)}</option>`).join("")||'<option value="">لا توجد أهداف معتمدة</option>';
- updateLotSelector();
-}
-function updateLotSelector(){
- const dev=$("#runDevice")?.value, analyte=$("#runAnalyte")?.value, ts=window._targetsCache||[];
- const groups=[...new Map(ts.filter(t=>t.deviceId===dev&&t.analyte===analyte&&t.approved).map(t=>[t.product+"|"+t.lot,t])).values()];
- $("#runLot").innerHTML=groups.map(t=>`<option value="${esc(t.product)}|${esc(t.lot)}">${esc(t.product)} · ${esc(t.lot)}</option>`).join("")||'<option value="">لا توجد LOTs معتمدة</option>';
- renderRunLevelInputs();
-}
-async function applyActivePolicy(){
- const dev=$("#runDevice")?.value, analyte=$("#runAnalyte")?.value;
- const policy=(await all("policies")).find(p=>p.active&&p.deviceId===dev&&p.analyte===analyte);
- window._activePolicy=policy||null;
- $$('input[name="rules"]').forEach(c=>c.checked=!!policy?.rules.includes(c.value));
- const ref=$("#runForm [name=policy]");if(ref)ref.value=policy?`${policy.reference} · ${policy.version}`:"";
-}
-function renderRunLevelInputs(){
- const dev=$("#runDevice")?.value, analyte=$("#runAnalyte")?.value, key=$("#runLot")?.value, ts=window._targetsCache||[];
- const [product,lot]=(key||"|").split("|");
- const matches=ts.filter(t=>t.deviceId===dev&&t.analyte===analyte&&t.product===product&&t.lot===lot&&t.approved);
- $("#runLevelInputs").innerHTML=matches.length?matches.map(t=>`<div class="level-card"><strong>${esc(t.level)} · Mean ${t.mean} · SD ${t.sd} ${esc(t.unit)}</strong><label>القراءة<input type="number" step="any" data-level-target="${t.id}" required></label></div>`).join(""):'<div class="empty">لا توجد مستويات QC معتمدة لهذا الاختيار</div>';
-}
-document.addEventListener("change",e=>{
- if(["runDevice","runAnalyte","runLot"].includes(e.target.id)){
-  if(e.target.id==="runDevice"){updateRunSelectors();applyActivePolicy();}
-  else if(e.target.id==="runAnalyte"){updateLotSelector();applyActivePolicy();}
-  else renderRunLevelInputs();
- }
-});
-document.addEventListener("click",async e=>{
- const b=e.target.closest("[data-approve-target]");
- if(b){const t=(await all("targets")).find(x=>x.id===b.dataset.approveTarget);if(!t)return;
-  t.approved=true;t.approvedAt=new Date().toISOString();t.approvedBy="local-manager";await put("targets",t);toast("تم اعتماد الهدف محلياً");render();}
- const a=e.target.closest("[data-approve-aps]");
- if(a){const spec=(await all("aps")).find(x=>x.id===a.dataset.approveAps);if(!spec)return;spec.status="approved";spec.approvedAt=new Date().toISOString();await put("aps",spec);toast("تم اعتماد المواصفة محلياً");render();}
-});
-function table(headers,rows){if(!rows.length)return '<div class="empty">لا توجد بيانات مسجلة بعد</div>';return `<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(v=>`<td>${v??"—"}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`}
-$("#deviceForm").addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(e.target);await put("devices",{id:uid(),name:f.get("name"),manufacturer:f.get("manufacturer"),model:f.get("model"),status:f.get("status")});e.target.reset();toast("تم حفظ الجهاز");render()});
-$("#targetForm").addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(e.target);const mean=Number(f.get("mean")),sd=Number(f.get("sd"));if(!(sd>0)){toast("يجب أن تكون SD أكبر من صفر");return}await put("targets",{id:uid(),deviceId:f.get("deviceId"),product:f.get("product"),lot:f.get("lot"),expiry:f.get("expiry"),analyte:f.get("analyte"),level:f.get("level"),targetType:f.get("targetType"),mean,sd,unit:f.get("unit"),source:f.get("source"),createdAt:new Date().toISOString(),approved:false});e.target.reset();toast("حُفظ الهدف بحالة غير معتمد؛ راجع بياناته قبل الاستخدام");render()});
-$("#runForm").addEventListener("submit",async e=>{
- e.preventDefault();
- const f=new FormData(e.target), devId=f.get("deviceId"), analyte=f.get("analyte"), lotKey=f.get("lotKey");
- const [product,lot]=(lotKey||"|").split("|"), targets=await all("targets");
- const matched=targets.filter(t=>t.deviceId===devId&&t.analyte===analyte&&t.product===product&&t.lot===lot&&t.approved);
- const inputs=$$("#runLevelInputs [data-level-target]");
- if(!matched.length||inputs.length!==matched.length){toast("لا توجد مستويات معتمدة مكتملة");return}
- const results=[];
- for(const inp of inputs){
-  const target=matched.find(t=>t.id===inp.dataset.levelTarget), value=Number(inp.value);
-  if(!target||!Number.isFinite(value)){toast("أدخل قراءة صحيحة لكل مستوى");return}
-  const history=(await all("runs")).flatMap(r=>(r.deviceId===devId&&r.analyte===analyte&&r.lot===lot?(r.results||[]):[]))
-    .filter(x=>x.targetId===target.id).map(x=>({z:x.z,runAt:x.runAt}));
-  const rules=f.getAll("rules").filter(x=>x!=="R_4S");
-  const ev=window.AlIsraaQCEngine.evaluateSingleLevel({value,target:{mean:target.mean,sd:target.sd},history,enabledRules:rules});
-  results.push({targetId:target.id,level:target.level,value,z:ev.z,status:ev.status,violations:ev.violations,warnings:ev.warnings,evidence:ev.evidence,unit:target.unit,targetSnapshot:{mean:target.mean,sd:target.sd,source:target.source,targetType:target.targetType}});
- }
- const allRules=f.getAll("rules"), r4sEnabled=allRules.includes("R_4S");
- let r4s={triggered:false};
- if(r4sEnabled){
-  r4s=window.AlIsraaQCEngine.evaluateR4sSameRun(results.map((r,i)=>({levelId:r.targetId,value:r.value,mean:matched.find(t=>t.id===r.targetId).mean,sd:matched.find(t=>t.id===r.targetId).sd})));
-  if(r4s.triggered){results.forEach(r=>{r.violations=[...r.violations,"R_4S"];r.status="rejected";r.evidence={...r.evidence,R_4S:r4s.levels}})}
- }
- const status=results.some(r=>r.status==="rejected")?"rejected":results.some(r=>r.status==="warning")?"warning":"accepted";
- const run={id:uid(),deviceId:devId,analyte,product,lot,runAt:f.get("runAt"),results,status,rules:allRules,policy:f.get("policy"),policySnapshot:window._activePolicy||{reference:f.get("policy"),rules:allRules},notes:f.get("notes"),r4sEvidence:r4s,engineVersion:"0.4.0-prevalidation",createdAt:new Date().toISOString()};
- await put("runs",run);
- $("#evaluationResult").innerHTML=`<div class="result-card ${status}"><strong>نتيجة التشغيل: ${statusLabel(status)}</strong><div class="result-lines">${results.map(r=>`<div>${esc(r.level)}: ${r.value} ${esc(r.unit)} · Z=${r.z.toFixed(2)} · ${statusLabel(r.status)} · ${(r.violations||[]).join(", ")||"لا مخالفة"}</div>`).join("")}</div><p>R₄s: ${r4sEnabled?(r4s.triggered?"مخالفة بين مستويين":(r4s.reason||"لم تتحقق شروط المخالفة")):"غير مفعّل"}</p><small>تم حفظ Snapshot للأهداف ومصادرها والقواعد وإصدار المحرك. راجع السياسة المعتمدة قبل الاستخدام.</small></div>`;
- toast("تم حفظ التشغيل");render();
-});
-$("#calForm").addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(e.target),dev=(await all("devices")).find(x=>x.id===f.get("deviceId"));await put("calibrations",{id:uid(),deviceId:f.get("deviceId"),deviceName:dev?.name,analyte:f.get("analyte"),date:f.get("date"),lot:f.get("lot"),status:f.get("status"),notes:f.get("notes")});e.target.reset();toast("تم حفظ سجل المعايرة");render()});
-$("#eqaForm").addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(e.target);await put("eqa",{id:uid(),provider:f.get("provider"),analyte:f.get("analyte"),sample:f.get("sample"),result:f.get("result"),assigned:f.get("assigned"),unit:f.get("unit"),zscore:f.get("zscore"),createdAt:new Date().toISOString()});e.target.reset();toast("تم حفظ سجل EQA");render()});
-$("#updateForm").addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(e.target);await put("updates",{id:uid(),source:f.get("source"),title:f.get("title"),url:f.get("url"),date:f.get("date"),summary:f.get("summary"),status:"pending_review"});e.target.reset();toast("أضيف التحديث للمراجعة");render()});
-async function exportData(){const data={format:"alisraa-qc-backup",version:1,exportedAt:new Date().toISOString(),data:{}};for(const s of stores)data.data[s]=await all(s);const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`Al-Israa-QC-Backup-${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(a.href);toast("تم إنشاء النسخة الاحتياطية")}
-$("#backupBtn").onclick=exportData;$("#exportBtn2").onclick=exportData;
-$("#importFile").addEventListener("change",async e=>{const file=e.target.files[0];if(!file)return;try{const data=JSON.parse(await file.text());if(data.format!=="alisraa-qc-backup")throw Error("format");for(const s of stores){for(const item of data.data?.[s]||[])await put(s,item)}toast("تم استيراد النسخة");render()}catch{toast("ملف النسخة غير صالح")}e.target.value=""});
-if("serviceWorker" in navigator)window.addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(()=>{}));
-(async()=>{db=await openDB();await seedDevices();$("#runForm [name=runAt]").value=nowLocal();await render();await applyActivePolicy();if(!navigator.onLine)$("#connection").textContent="دون إنترنت";window.addEventListener("online",()=>$("#connection").textContent="محلي");window.addEventListener("offline",()=>$("#connection").textContent="دون إنترنت")})().catch(err=>{console.error(err);toast("تعذر فتح قاعدة البيانات المحلية")});
+["#aDevice","#aAnalyte","#aLot","#aLevel"].forEach(s=>$(s).addEventListener("change",updateAnalytics));
+async function renderDevices(){$("#devicesList").innerHTML=devices.map(x=>`<div class="rule-row">${esc(x)}<span class="pill accepted">مدعوم</span></div>`).join("")}
+function download(name,data,type){const a=document.createElement("a"),u=URL.createObjectURL(new Blob([data],{type}));a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
+async function exportBackup(){const payload={app:"Al-Israa QC Manager",version:"3.3.0",createdAt:dateNow(),targets:await all("targets"),runs:await all("runs"),audit:await all("audit"),calibration:await all("calibration"),eqa:await all("eqa"),actions:await all("actions")};download("Al-Israa-QC-Backup-"+new Date().toISOString().slice(0,10)+".json",JSON.stringify(payload,null,2),"application/json");await audit("تصدير نسخة احتياطية",payload.createdAt)}
+$("#backupBtn").onclick=exportBackup;$("#exportBtn").onclick=exportBackup;
+$("#restoreFile").onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const x=JSON.parse(await f.text());if(!Array.isArray(x.targets)||!Array.isArray(x.runs))throw Error("صيغة النسخة غير صحيحة");if(!confirm("سيتم استبدال البيانات المحلية الحالية. أنشئ نسخة احتياطية أولاً. هل تريد المتابعة؟"))return;for(const s of ["targets","runs","audit","calibration","eqa","actions"])await clear(s);for(const s of ["targets","runs","audit","calibration","eqa","actions"])for(const item of (x[s]||[]))await put(s,item);toast("تمت الاستعادة");await refresh()}catch(err){toast("تعذرت الاستعادة: "+err.message)}e.target.value=""};
+$("#printReport").onclick=()=>window.print();
+$("#csvBtn").onclick=async()=>{const rs=await all("runs"),rows=[["Date","Device","Analyte","LOT","Level","Value","Unit","Mean","SD","Z","Status"]];rs.forEach(r=>r.results.forEach(x=>rows.push([r.runAt,r.device,r.analyte,r.lot,x.level,x.value,x.unit,x.mean,x.sd,x.z,r.status])));download("QC-runs.csv","\ufeff"+rows.map(r=>r.map(x=>'"'+String(x??"").replace(/"/g,'""')+'"').join(",")).join("\n"),"text/csv;charset=utf-8")};
 
-$("#policyForm").addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(e.target),deviceId=f.get("deviceId"),analyte=f.get("analyte");for(const p of await all("policies")){if(p.deviceId===deviceId&&p.analyte===analyte&&p.active){p.active=false;await put("policies",p)}}await put("policies",{id:uid(),deviceId,analyte,version:f.get("version"),reference:f.get("reference"),rules:f.getAll("policyRules"),active:true,approvedAt:new Date().toISOString()});toast("تم حفظ سياسة الجهاز والتحليل");render()});
-$("#apsForm").addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(e.target);await put("aps",{id:uid(),analyte:f.get("analyte"),name:f.get("name"),model:f.get("model"),tea:Number(f.get("tea")),unit:f.get("unit"),source:f.get("source"),year:f.get("year"),status:"pending_review",createdAt:new Date().toISOString()});e.target.reset();toast("حُفظت المواصفة بانتظار المراجعة");render()});
-$("#sigmaForm").addEventListener("submit",e=>{e.preventDefault();const f=new FormData(e.target);try{const sigma=window.AlIsraaQCEngine.calculateSigma({teaPercent:Number(f.get("tea")),biasPercent:Number(f.get("bias")),cvPercent:Number(f.get("cv"))});$("#sigmaResult").innerHTML=`<div class="result-card"><strong>Sigma = ${sigma.toFixed(2)}</strong><p>الحساب: (TEa − |Bias|) ÷ CV</p><small>تأكد من توافق الوحدات والمصدر والنموذج قبل تفسير النتيجة.</small></div>`}catch(err){toast("تحقق من المدخلات")}}); 
-
-$("#biasForm").addEventListener("submit",e=>{e.preventDefault();const f=new FormData(e.target);try{const bias=window.AlIsraaQCEngine.calculatePercentBias({measuredMean:Number(f.get("measured")),comparisonValue:Number(f.get("comparison"))});$("#biasResult").innerHTML=`<div class="result-card"><strong>Bias = ${bias.toFixed(2)}%</strong><p>قيمة المقارنة: ${f.get("comparison")}</p></div>`}catch(err){toast("تحقق من القيم المدخلة")}}); 
+async function renderCalibration(){
+ const rows=(await all("calibration")).sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+ $("#calRows").innerHTML=rows.map(x=>`<div class="history-item"><b>${esc(x.device)} · ${esc(x.analyte)}</b><div>${esc(x.date)} · ${esc(x.status)} · LOT ${esc(x.lot||"—")}</div><div class="small">الاستحقاق: ${esc(x.due||"غير محدد")} · ${esc(x.operator||"")}</div><div>${esc(x.notes||"")}</div></div>`).join("")||"لا توجد سجلات معايرة.";
+ const overdue=rows.filter(x=>x.due&&x.due<new Date().toISOString().slice(0,10));
+ if(overdue.length)toast(`تنبيه: توجد ${overdue.length} معايرة تجاوزت تاريخ الاستحقاق`);
+}
+$("#calForm").addEventListener("submit",async e=>{
+ e.preventDefault();const x={id:uid(),device:$("#cDevice").value,analyte:$("#cAnalyte").value.trim(),date:$("#cDate").value,due:$("#cDue").value,lot:$("#cLot").value.trim(),status:$("#cStatus").value,operator:$("#cOperator").value.trim(),notes:$("#cNotes").value,createdAt:dateNow()};
+ await put("calibration",x);await audit("تسجيل معايرة",x);e.target.reset();await renderCalibration();toast("تم حفظ سجل المعايرة");
+});
+async function renderEqa(){const rows=(await all("eqa")).sort((a,b)=>(b.date||"").localeCompare(a.date||""));$("#eqaRows").innerHTML=rows.map(x=>`<div class="history-item"><b>${esc(x.provider)} · ${esc(x.analyte)} · ${esc(x.device)}</b><div>${esc(x.date)} · ${esc(x.cycle||"")} · ${esc(x.assessment)}</div><div>نتيجة المختبر: ${esc(x.result)} ${esc(x.unit)} · الهدف: ${esc(x.target??"—")}</div><div>${esc(x.notes||"")}</div></div>`).join("")||"لا توجد نتائج EQA/PT."}
+$("#eqaForm").addEventListener("submit",async e=>{e.preventDefault();const x={id:uid(),device:$("#eDevice").value,provider:$("#eProvider").value.trim(),analyte:$("#eAnalyte").value.trim(),cycle:$("#eCycle").value.trim(),date:$("#eDate").value,result:+$("#eResult").value,target:$("#eTarget").value===""?null:+$("#eTarget").value,unit:$("#eUnit").value.trim(),assessment:$("#eAssessment").value,notes:$("#eNotes").value,createdAt:dateNow()};if(!Number.isFinite(x.result))return toast("تحقق من نتيجة المختبر");await put("eqa",x);await audit("تسجيل EQA/PT",x);e.target.reset();await renderEqa();toast("تم حفظ نتيجة EQA/PT")});
+async function renderActions(){const rows=(await all("actions")).sort((a,b)=>(b.date||"").localeCompare(a.date||""));$("#actionRows").innerHTML=rows.map(x=>`<div class="history-item"><b>${esc(x.device)} · ${esc(x.analyte)} · ${esc(x.type)}</b><div>${esc(x.date)} · ${esc(x.operator)} · ${esc(x.closure)}</div><p><b>السبب المثبت:</b> ${esc(x.cause||"لم يحدد")}</p><p><b>الإجراء:</b> ${esc(x.correction)}</p><p><b>إعادة QC:</b> ${esc(x.retest||"—")}</p><small>مرجع التشغيل: ${esc(x.runId||"—")}</small></div>`).join("")||"لا توجد إجراءات مسجلة."}
+$("#actionForm").addEventListener("submit",async e=>{e.preventDefault();const x={id:uid(),runId:$("#acRunId").value.trim(),device:$("#acDevice").value,analyte:$("#acAnalyte").value.trim(),date:$("#acDate").value,operator:$("#acOperator").value.trim(),type:$("#acType").value,cause:$("#acCause").value.trim(),correction:$("#acCorrection").value.trim(),retest:$("#acRetest").value.trim(),closure:$("#acClosure").value,createdAt:dateNow()};await put("actions",x);await audit("إضافة إجراء تصحيحي",x);e.target.reset();await renderActions();toast("تم حفظ التحقيق والإجراء")});
+async function refresh(){await renderDashboard();await renderTargets();await populateRun()}
+$("#newTarget").onclick=()=>$("#tMaterial").focus();
+$("#aboutBtn").onclick=()=>alert("Al-Israa QC Manager 3.3.0\nنسخة هندسية قيد التحقق. لا تستخدم لاتخاذ قرار سريري قبل التحقق والاعتماد المحلي.");
+$("#checkUpdate").onclick=()=>checkForUpdate(true);
+let waitingWorker=null;
+async function checkForUpdate(force){if(!("serviceWorker"in navigator))return;try{const reg=await navigator.serviceWorker.getRegistration();if(reg){await reg.update();if(reg.waiting){waitingWorker=reg.waiting;$("#updateBar").classList.add("show")}else if(force)toast("التطبيق محدّث حسب آخر نسخة متاحة.")}}catch(e){if(force)toast("تعذر التحقق من التحديث")}}
+$("#updateNow").onclick=()=>{if(waitingWorker){waitingWorker.postMessage({type:"SKIP_WAITING"});waitingWorker=null}else location.reload()};
+if("serviceWorker"in navigator){navigator.serviceWorker.register("./sw.js").then(reg=>{if(reg.waiting){waitingWorker=reg.waiting;$("#updateBar").classList.add("show")}reg.addEventListener("updatefound",()=>{const w=reg.installing;w?.addEventListener("statechange",()=>{if(w.state==="installed"&&navigator.serviceWorker.controller){waitingWorker=w;$("#updateBar").classList.add("show")}})});document.addEventListener("visibilitychange",()=>{if(!document.hidden)checkForUpdate(false)});setInterval(()=>{if(!document.hidden)checkForUpdate(false)},6*60*60*1000)});navigator.serviceWorker.addEventListener("controllerchange",()=>location.reload())}
+$("#today").textContent=new Date().toLocaleDateString("ar-IQ");
+(async()=>{try{await openDB();fillDevices();await refresh();if(location.hash)nav(location.hash.slice(1),false)}catch(e){alert("تعذر فتح قاعدة البيانات المحلية: "+e.message)}})();
+})();
